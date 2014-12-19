@@ -149,6 +149,17 @@
                                            MKMapPointForCoordinate(CLLocationCoordinate2DMake(maxLat, maxLng))) / 2.f;
 }
 
+- (BOOL)isEqual:(id)object
+{
+    if (!object || ![object isKindOfClass:[self class]]) return NO;
+    return [[object annotations] isEqualToSet:self.annotations];
+}
+
+- (NSUInteger)hash
+{
+    return [self.annotations hash];
+}
+
 - (NSString *)description {
     return [NSString stringWithFormat:@"<%@: %p; coordinate = (%f, %f); annotations = %@>", NSStringFromClass(self.class), self, self.coordinate.latitude, self.coordinate.longitude, self.annotations];
 }

@@ -94,10 +94,7 @@ typedef enum {
 }
 
 - (void)setAnnotations:(NSArray *)annotations {
-    [self.mapView removeAnnotations:self.currentAnnotations];
-
     self.annotationTree = [[KPAnnotationTree alloc] initWithAnnotations:annotations];
-
     [self updateVisibleMapAnnotationsOnMapView:NO];
 }
 
@@ -188,7 +185,11 @@ typedef enum {
         }
     }
 
-    NSArray *oldClusters = self.currentAnnotations;
+    NSMutableSet *removedAnnotations = [NSMutableSet setWithArray:self.currentAnnotations ?: @[]];
+    [removedAnnotations minusSet:[NSSet setWithArray:newClusters ?: @[]]];
+
+    NSMutableSet *addedAnnotations = [NSMutableSet setWithArray:newClusters ?: @[]];
+    [addedAnnotations minusSet:[NSSet setWithArray:self.currentAnnotations ?: @[]]];
 
     if (animated) {
         // dispatch group to fire off callback after mapView has been updated with all new annotations
@@ -196,14 +197,14 @@ typedef enum {
 
         NSSet *visibleAnnotations = [self.mapView annotationsInMapRect:self.mapView.visibleMapRect];
 
-        for (KPAnnotation *newCluster in newClusters) {
+        for (KPAnnotation *newCluster in addedAnnotations) {
 
             [self.mapView addAnnotation:newCluster];
 
             // if was part of an old cluster, then we want to animate it from the old to the new (spreading animation)
-            for (KPAnnotation *oldCluster in oldClusters) {
+            for (KPAnnotation *oldCluster in removedAnnotations) {
                 if ([oldCluster.annotations member:[newCluster.annotations anyObject]]) {
-                    BOOL shouldAnimate = [oldCluster.annotations isEqualToSet:newCluster.annotations] == NO;
+                    BOOL shouldAnimate = [oldCluster isEqual:newCluster] == NO;
 
                     if (shouldAnimate && [visibleAnnotations member:oldCluster]) {
                         dispatch_group_enter(group);
@@ -223,7 +224,7 @@ typedef enum {
                 // (collapsing animation)
 
                 else if ([newCluster.annotations member:[oldCluster.annotations anyObject]]) {
-                    BOOL shouldAnimate = [oldCluster.annotations isEqualToSet:newCluster.annotations] == NO;
+                    BOOL shouldAnimate = [oldCluster isEqual:newCluster] == NO;
 
                     if (shouldAnimate && MKMapRectContainsPoint(self.mapView.visibleMapRect, MKMapPointForCoordinate(newCluster.coordinate))) {
 
@@ -252,10 +253,9 @@ typedef enum {
             }
         });
     }
-
     else {
-        [self.mapView removeAnnotations:oldClusters];
-        [self.mapView addAnnotations:newClusters];
+        [self.mapView removeAnnotations:[removedAnnotations allObjects]];
+        [self.mapView addAnnotations:[addedAnnotations allObjects]];
 
         if ([self.delegate respondsToSelector:@selector(clusteringControllerDidUpdateVisibleMapAnnotations:)]) {
             [self.delegate clusteringControllerDidUpdateVisibleMapAnnotations:self];
