@@ -24,11 +24,11 @@
 
 #import "NSArray+KP.h"
 
-typedef NS_ENUM(NSInteger, KPClusteringControllerMapViewportChangeState) {
+typedef enum {
     KPClusteringControllerMapViewportNoChange,
     KPClusteringControllerMapViewportPan,
     KPClusteringControllerMapViewportZoom
-};
+} KPClusteringControllerMapViewportChangeState;
 
 
 @interface KPClusteringController()
@@ -55,17 +55,14 @@ typedef NS_ENUM(NSInteger, KPClusteringControllerMapViewportChangeState) {
 
 @implementation KPClusteringController
 
-- (id)initWithMapView:(MKMapView *)mapView
-{
+- (id)initWithMapView:(MKMapView *)mapView {
     return [self initWithMapView:mapView
              clusteringAlgorithm:[[KPGridClusteringAlgorithm alloc] init]];
             
 }
 
-- (id)initWithMapView:(MKMapView *)mapView clusteringAlgorithm:(id<KPClusteringAlgorithm>)algorithm
-{
-    NSAssert(mapView, @"mapView parameter must not be nil");
-
+- (id)initWithMapView:(MKMapView *)mapView clusteringAlgorithm:(id<KPClusteringAlgorithm>)algorithm {
+    
     self = [self init];
     
     if (self == nil) {
@@ -78,11 +75,8 @@ typedef NS_ENUM(NSInteger, KPClusteringControllerMapViewportChangeState) {
     self.lastRefreshedMapRegion = self.mapView.region;
 
     self.animationDuration = 0.5f;
-
-#if TARGET_OS_IPHONE
     self.animationOptions = UIViewAnimationOptionCurveEaseOut;
-#endif
-
+    
     self.clusteringAlgorithm = algorithm;
 
     return self;
@@ -100,44 +94,23 @@ typedef NS_ENUM(NSInteger, KPClusteringControllerMapViewportChangeState) {
 }
 
 - (void)setAnnotations:(NSArray *)annotations {
-    [self.mapView removeAnnotations:self.currentAnnotations];
-
     self.annotationTree = [[KPAnnotationTree alloc] initWithAnnotations:annotations];
-
     [self updateVisibleMapAnnotationsOnMapView:NO];
 }
 
 - (void)refresh:(BOOL)animated {
-    [self refresh:animated force:NO];
-}
-
-
--(void)refresh:(BOOL)animated force:(BOOL)force {
-    // Check if map is visible
-    if (self.mapView.visibleMapRect.size.width  == 0 ||
+    if (self.mapView.visibleMapRect.size.width == 0 ||
         self.mapView.visibleMapRect.size.height == 0) {
         return;
     }
 
-    // If force flag is enabled, don't do any validation with the viewport changes
-    if (force) {
-        [self updateVisibleMapAnnotationsOnMapView:animated];
+    KPClusteringControllerMapViewportChangeState mapViewportChangeState = self.mapViewportChangeState;
+
+    if (mapViewportChangeState != KPClusteringControllerMapViewportNoChange) {
+        [self updateVisibleMapAnnotationsOnMapView:(animated && mapViewportChangeState != KPClusteringControllerMapViewportPan)];
 
         self.lastRefreshedMapRect = self.mapView.visibleMapRect;
         self.lastRefreshedMapRegion = self.mapView.region;
-    }
-
-    // Else, check for significant panning or if the map is displayed
-    else {
-        KPClusteringControllerMapViewportChangeState mapViewportChangeState = self.mapViewportChangeState;
-
-        // Check for signficant viewport changes
-        if (mapViewportChangeState != KPClusteringControllerMapViewportNoChange) {
-            [self updateVisibleMapAnnotationsOnMapView:(animated && mapViewportChangeState != KPClusteringControllerMapViewportPan)];
-
-            self.lastRefreshedMapRect = self.mapView.visibleMapRect;
-            self.lastRefreshedMapRegion = self.mapView.region;
-        }
     }
 }
 
@@ -212,29 +185,28 @@ typedef NS_ENUM(NSInteger, KPClusteringControllerMapViewportChangeState) {
         }
     }
 
-    NSArray *oldClusters = self.currentAnnotations;
+    NSMutableSet *removedAnnotations = [NSMutableSet setWithArray:self.currentAnnotations ?: @[]];
+    [removedAnnotations minusSet:[NSSet setWithArray:newClusters ?: @[]]];
+
+    NSMutableSet *addedAnnotations = [NSMutableSet setWithArray:newClusters ?: @[]];
+    [addedAnnotations minusSet:[NSSet setWithArray:self.currentAnnotations ?: @[]]];
 
     if (animated) {
-        
-        NSMutableArray *removedAnnotations = [NSMutableArray arrayWithCapacity:[oldClusters count]];
-        
         // dispatch group to fire off callback after mapView has been updated with all new annotations
         dispatch_group_t group = dispatch_group_create();
 
         NSSet *visibleAnnotations = [self.mapView annotationsInMapRect:self.mapView.visibleMapRect];
 
-        for (KPAnnotation *newCluster in newClusters) {
+        for (KPAnnotation *newCluster in addedAnnotations) {
 
             [self.mapView addAnnotation:newCluster];
 
-            for (KPAnnotation *oldCluster in oldClusters) {
-                
-                // if was part of an old cluster, then we want to animate it from the old to the new (spreading animation)
+            // if was part of an old cluster, then we want to animate it from the old to the new (spreading animation)
+            for (KPAnnotation *oldCluster in removedAnnotations) {
                 if ([oldCluster.annotations member:[newCluster.annotations anyObject]]) {
-                    BOOL shouldAnimate = [oldCluster.annotations isEqualToSet:newCluster.annotations] == NO;
+                    BOOL shouldAnimate = [oldCluster isEqual:newCluster] == NO;
 
                     if (shouldAnimate && [visibleAnnotations member:oldCluster]) {
-                        
                         dispatch_group_enter(group);
 
                         [self animateCluster:newCluster
@@ -245,15 +217,14 @@ typedef NS_ENUM(NSInteger, KPClusteringControllerMapViewportChangeState) {
                                               }];
                     }
 
-                    [removedAnnotations addObject:oldCluster];
+                    [self.mapView removeAnnotation:oldCluster];
                 }
 
                 // if the new cluster had old annotations, then animate the old annotations to the new one, and remove it
                 // (collapsing animation)
 
                 else if ([newCluster.annotations member:[oldCluster.annotations anyObject]]) {
-                    
-                    BOOL shouldAnimate = [oldCluster.annotations isEqualToSet:newCluster.annotations] == NO;
+                    BOOL shouldAnimate = [oldCluster isEqual:newCluster] == NO;
 
                     if (shouldAnimate && MKMapRectContainsPoint(self.mapView.visibleMapRect, MKMapPointForCoordinate(newCluster.coordinate))) {
 
@@ -270,13 +241,11 @@ typedef NS_ENUM(NSInteger, KPClusteringControllerMapViewportChangeState) {
                     }
 
                     else {
-                        [removedAnnotations addObject:oldCluster];
+                        [self.mapView removeAnnotation:oldCluster];
                     }
                 }
             }
         }
-        
-        [self.mapView removeAnnotations:removedAnnotations];
 
         dispatch_group_notify(group, dispatch_get_main_queue(), ^{
             if ([self.delegate respondsToSelector:@selector(clusteringControllerDidUpdateVisibleMapAnnotations:)]) {
@@ -284,10 +253,9 @@ typedef NS_ENUM(NSInteger, KPClusteringControllerMapViewportChangeState) {
             }
         });
     }
-
     else {
-        [self.mapView removeAnnotations:oldClusters];
-        [self.mapView addAnnotations:newClusters];
+        [self.mapView removeAnnotations:[removedAnnotations allObjects]];
+        [self.mapView addAnnotations:[addedAnnotations allObjects]];
 
         if ([self.delegate respondsToSelector:@selector(clusteringControllerDidUpdateVisibleMapAnnotations:)]) {
             [self.delegate clusteringControllerDidUpdateVisibleMapAnnotations:self];
@@ -336,39 +304,14 @@ typedef NS_ENUM(NSInteger, KPClusteringControllerMapViewportChangeState) {
             completion(finished);
         }
     };
-    [self executeAnimations:^{
-        cluster.coordinate = toCoord;
-    } completion:completionBlock];
     
-}
-
-- (void)executeAnimations:(void(^)(void))animations completion:(void(^)(BOOL finished))completionBlock {
-    if ([self.delegate respondsToSelector:@selector(clusteringController:
-                                                    performAnimations:
-                                                    withCompletionHandler:)]) {
-        [self.delegate clusteringController:self
-                          performAnimations:animations
-                      withCompletionHandler:completionBlock];
-    } else {
-#if TARGET_OS_IPHONE
-        [UIView animateWithDuration:self.animationDuration
-                              delay:0
-                            options:self.animationOptions
-                         animations:animations
-                         completion:completionBlock];
-#else
-        NSAssert(NO, @"Kingpin does not support animations on OSX yet!");
-
-        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
-            context.duration = self.animationDuration;
-            context.allowsImplicitAnimation = YES;
-
-            animations();
-        } completionHandler:^{
-            if (completionBlock) completionBlock(YES);
-        }];
-#endif
-    }
+    [UIView animateWithDuration:self.animationDuration
+                          delay:0.f
+                        options:self.animationOptions
+                     animations:^{
+                         cluster.coordinate = toCoord;
+                     }
+                     completion:completionBlock];
 }
 
 @end
