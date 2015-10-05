@@ -39,7 +39,7 @@
     }
 
     self.annotations = set;
-    self.title = [NSString stringWithFormat:@"%lu things", (unsigned long)[self.annotations count]];;
+    self.title = [self titleWithCount:[self.annotations count]];
     [self calculateValues];
     
     return self;
@@ -167,6 +167,10 @@
 
 - (NSString *)description {
     return [NSString stringWithFormat:@"<%@: %p; coordinate = (%f, %f); annotations = %@>", NSStringFromClass(self.class), self, self.coordinate.latitude, self.coordinate.longitude, self.annotations];
+}
+
+- (NSString*)titleWithCount:(NSUInteger)count {
+    return [NSString stringWithFormat:@"%lu %@", (unsigned long)count, (count==1)?NSLocalizedString(@"thing", nil):NSLocalizedString(@"things", nil)];
 }
 
 @end
